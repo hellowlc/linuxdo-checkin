@@ -2,13 +2,12 @@ import os
 import random
 import time
 import functools
-import sys
 
 from loguru import logger
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 from tabulate import tabulate
 
-# 重试装饰器保持不变
+
 def retry_decorator(retries=3):
     def decorator(func):
         @functools.wraps(func)
@@ -19,12 +18,14 @@ def retry_decorator(retries=3):
                 except Exception as e:
                     if attempt == retries - 1:  # 最后一次尝试
                         logger.error(f"函数 {func.__name__} 最终执行失败: {str(e)}")
-                    else:
-                        logger.warning(f"函数 {func.__name__} 第 {attempt + 1}/{retries} 次尝试失败: {str(e)}")
-                    time.sleep(2)  # 增加等待时间，避免过于频繁重试
-            return None  # 返回 None 表示失败
+                    logger.warning(f"函数 {func.__name__} 第 {attempt + 1}/{retries} 次尝试失败: {str(e)}")
+                    time.sleep(1)
+            return None
+
         return wrapper
+
     return decorator
+
 
 os.environ.pop("DISPLAY", None)
 os.environ.pop("DYLD_LIBRARY_PATH", None)
@@ -33,67 +34,34 @@ USERNAME = os.environ.get("USERNAME")
 PASSWORD = os.environ.get("PASSWORD")
 
 HOME_URL = "https://linux.do/"
+LOGIN_URL = "https://linux.do/login"
 
 
 class LinuxDoBrowser:
     def __init__(self) -> None:
         self.pw = sync_playwright().start()
-        self.browser = self.pw.firefox.launch(headless=True, timeout=30000)  # 可以调整超时
+        self.browser = self.pw.firefox.launch(headless=True, timeout=30000)
         self.context = self.browser.new_context()
         self.page = self.context.new_page()
         self.page.goto(HOME_URL)
-        self.page.wait_for_load_state("networkidle")  # 等待页面完全加载
 
-    @retry_decorator(retries=5)  # 应用重试装饰器到 login 方法，增加重试次数
     def login(self):
         logger.info("开始登录")
-        
-        try:
-            # 等待登录按钮可见、可交互，并设置较长的超时时间
-            self.page.wait_for_selector(".login-button .d-button-label", state="visible", timeout=60000)
-            
-            # 点击登录按钮
-            self.page.click(".login-button .d-button-label")
-            
-            # 等待可能的弹窗或 iframe 加载（例如 Google 登录对话框）
-            # 如果知道 iframe 的选择器，可以添加等待
-            try:
-                self.page.wait_for_selector('iframe[title="Sign in with Google Dialog"]', state="visible", timeout=10000)
-                # 如果需要切换到 iframe：
-                # frame = self.page.frame_locator('iframe[title="Sign in with Google Dialog"]')
-                # frame.locator("#some-element-in-iframe").click()  # 替换为实际元素
-                logger.warning("检测到 Google 登录对话框，正在等待...")
-            except PlaywrightTimeoutError:
-                logger.info("未检测到额外对话框，继续操作。")
-            
-            # 填充用户名和密码
-            self.page.wait_for_selector("#login-account-name", state="visible")
-            self.page.fill("#login-account-name", USERNAME)
-            
-            self.page.wait_for_selector("#login-account-password", state="visible")
-            self.page.fill("#login-account-password", PASSWORD)
-            
-            # 点击登录按钮
-            self.page.wait_for_selector("#login-button", state="visible")
-            self.page.click("#login-button")
-            
-            # 等待登录完成，检查用户元素出现
-            self.page.wait_for_load_state("networkidle")  # 等待网络空闲
-            self.page.wait_for_selector("#current-user", timeout=30000)  # 等待特定元素出现
-            
-            user_ele = self.page.query_selector("#current-user")
-            if user_ele:
-                logger.info("登录成功")
-                return True
-            else:
-                logger.error("登录失败: 用户元素未找到")
-                return False
-        except PlaywrightTimeoutError as e:
-            logger.error(f"登录超时: {str(e)}")
-            raise  # 抛出异常，让装饰器捕获并重试
-        except Exception as e:
-            logger.error(f"登录过程中发生错误: {str(e)}")
-            raise  # 抛出异常，让装饰器捕获
+        self.page.goto(LOGIN_URL)
+        time.sleep(2)
+        self.page.fill("#login-account-name", USERNAME)
+        time.sleep(2)
+        self.page.fill("#login-account-password", PASSWORD)
+        time.sleep(2)
+        self.page.click("#login-button")
+        time.sleep(10)
+        user_ele = self.page.query_selector("#current-user")
+        if not user_ele:
+            logger.error("登录失败")
+            return False
+        else:
+            logger.info("登录成功")
+            return True
 
     def click_topic(self):
         topic_list = self.page.query_selector_all("#list-area .title")
@@ -140,8 +108,7 @@ class LinuxDoBrowser:
 
     def run(self):
         if not self.login():
-            logger.error("登录失败，程序终止")
-            sys.exit(1)  # 使用非零退出码终止整个程序
+            return
         self.click_topic()
         self.print_connect_info()
 
